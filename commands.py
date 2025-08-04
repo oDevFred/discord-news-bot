@@ -1,11 +1,11 @@
 import discord
-import sqlite3
 from discord import app_commands
 from discord.ext import commands
 from discord.ui import Button, Select, View
 from database import Database
 from news import NewsService
 import logging
+import sqlite3
 
 # Configurar logging
 logging.basicConfig(
@@ -95,9 +95,9 @@ class NewsView(discord.ui.View):
         if not subscriptions:
             await interaction.followup.send("Você não assinou nenhum tópico!", ephemeral=True)
             return
-        view = DeliveryView(self.db, self.news_service, subscriptions, self.guild, interaction.user)
+        view = LanguageView(self.db, self.news_service, subscriptions, self.guild, interaction.user, is_summary=False)
         await interaction.followup.send(
-            "Escolha onde receber as notícias:",
+            "Escolha o idioma para as notícias:",
             view=view,
             ephemeral=True
         )
@@ -109,13 +109,13 @@ class NewsView(discord.ui.View):
         if not subscriptions:
             await interaction.followup.send("Você não assinou nenhum tópico!", ephemeral=True)
             return
-        top_news = self.db.get_top_voted_news(subscriptions, limit=3)
-        if not top_news:
-            await interaction.followup.send("Nenhuma notícia votada encontrada para seus tópicos.", ephemeral=True)
-            return
-        response = "\n".join([f"- {news['title']} ({news['url']}) [{news['vote_count']} votos]" for news in top_news])
-        await interaction.followup.send(f"Resumo diário:\n{response}", ephemeral=True)
-        logging.info(f"Resumo diário exibido para {interaction.user}, {len(top_news)} notícias")
+        view = LanguageView(self.db, self.news_service, subscriptions, self.guild, interaction.user, is_summary=True)
+        await interaction.followup.send(
+            "Escolha o idioma para o resumo diário:",
+            view=view,
+            ephemeral=True
+        )
+        logging.info(f"Botão 'Resumo Diário' clicado por {interaction.user}")
 
 class SubscribeView(discord.ui.View):
     def __init__(self, db: Database, topics: list, user_id: int):
@@ -168,14 +168,58 @@ class SubscribeView(discord.ui.View):
             f"Adicionados={added}, Removidos={removed}"
         )
 
-class DeliveryView(discord.ui.View):
-    def __init__(self, db: Database, news_service: NewsService, subscriptions: list, guild: discord.Guild, user: discord.User):
+class LanguageView(discord.ui.View):
+    def __init__(self, db: Database, news_service: NewsService, subscriptions: list, guild: discord.Guild, user: discord.User, is_summary: bool):
         super().__init__(timeout=60.0)
         self.db = db
         self.news_service = news_service
         self.subscriptions = subscriptions
         self.guild = guild
         self.user = user
+        self.is_summary = is_summary
+        select = Select(
+            placeholder="Escolha o idioma",
+            options=[
+                discord.SelectOption(label="Português", value="pt"),
+                discord.SelectOption(label="Espanhol", value="es"),
+                discord.SelectOption(label="Francês", value="fr"),
+                discord.SelectOption(label="Inglês (Original)", value="en")
+            ]
+        )
+        select.callback = self.select_callback
+        self.add_item(select)
+
+    async def select_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        target_lang = interaction.data["values"][0]
+
+        if self.is_summary:
+            top_news = self.db.get_top_voted_news(self.subscriptions, limit=3)
+            if not top_news:
+                await interaction.followup.send("Nenhuma notícia votada encontrada para seus tópicos.", ephemeral=True)
+                return
+            translated_news = self.news_service.translate_news(top_news, target_lang)
+            response = "\n".join([f"- {news['title']} ({news['url']}) [{news['vote_count']} votos]" for news in translated_news])
+            await interaction.followup.send(f"Resumo diário ({target_lang}):\n{response}", ephemeral=True)
+            logging.info(f"Resumo diário exibido para {self.user} em {target_lang}, {len(top_news)} notícias")
+        else:
+            view = DeliveryView(self.db, self.news_service, self.subscriptions, self.guild, self.user, target_lang)
+            await interaction.followup.send(
+                "Escolha onde receber as notícias:",
+                view=view,
+                ephemeral=True
+            )
+            logging.info(f"Idioma {target_lang} selecionado por {self.user} para notícias")
+
+class DeliveryView(discord.ui.View):
+    def __init__(self, db: Database, news_service: NewsService, subscriptions: list, guild: discord.Guild, user: discord.User, target_lang: str):
+        super().__init__(timeout=60.0)
+        self.db = db
+        self.news_service = news_service
+        self.subscriptions = subscriptions
+        self.guild = guild
+        self.user = user
+        self.target_lang = target_lang
         select = Select(
             placeholder="Escolha o destino das notícias",
             options=[
@@ -196,15 +240,17 @@ class DeliveryView(discord.ui.View):
             await interaction.followup.send("Nenhuma notícia encontrada para seus tópicos.", ephemeral=True)
             return
 
-        news_ids = self.news_service.save_news(news_list)
-        response = "\n".join([f"- {news['title']} ({news['url']})" for news in news_list])
+        # Traduzir notícias
+        translated_news = self.news_service.translate_news(news_list, self.target_lang)
+        news_ids = self.news_service.save_news(news_list)  # Salvar notícias originais
+        response = "\n".join([f"- {news['title']} ({news['url']})" for news in translated_news])
 
         try:
             view = VoteView(self.db, news_ids)
             if destination == "dm":
-                message = await self.user.send(f"Notícias para seus tópicos:\n{response}", view=view)
+                message = await self.user.send(f"Notícias para seus tópicos ({self.target_lang}):\n{response}", view=view)
             else:
-                message = await interaction.channel.send(f"Notícias para {self.user.mention}:\n{response}", view=view)
+                message = await interaction.channel.send(f"Notícias para {self.user.mention} ({self.target_lang}):\n{response}", view=view)
 
             await message.add_reaction("👍")
             await message.add_reaction("⭐")
@@ -214,7 +260,7 @@ class DeliveryView(discord.ui.View):
 
             await interaction.followup.send("Notícias enviadas com sucesso!", ephemeral=True)
             logging.info(
-                f"Notícias enviadas para {destination} por {self.user}, "
+                f"Notícias enviadas para {destination} por {self.user} em {self.target_lang}, "
                 f"{len(news_list)} notícias, message_id={message.id}"
             )
         except discord.errors.Forbidden as e:

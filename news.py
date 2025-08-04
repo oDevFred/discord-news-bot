@@ -4,6 +4,7 @@ import logging
 import sqlite3
 from datetime import datetime
 from database import Database
+from deep_translator import GoogleTranslator
 
 # Configurar logging
 logging.basicConfig(
@@ -21,6 +22,7 @@ class NewsService:
             "games": "https://www.engadget.com/rss.xml",
             "ciberseguranca": "https://www.darkreading.com/rss.xml"
         }
+        self.translator = GoogleTranslator(source="auto")
 
     def fetch_news_api(self, topic: str, limit: int = 5) -> list:
         """Busca notícias da News API por tópico."""
@@ -88,6 +90,24 @@ class NewsService:
         ]
         return unique_news[:limit]
 
+    def translate_news(self, news_list: list, target_lang: str) -> list:
+        """Traduz os títulos das notícias para o idioma alvo."""
+        try:
+            translated_news = []
+            for news in news_list:
+                translated_title = self.translator.translate(news["title"], target_language=target_lang)
+                translated_news.append({
+                    "title": translated_title or news["title"],  # Fallback para título original
+                    "url": news["url"],
+                    "topic": news["topic"],
+                    "published_at": news["published_at"]
+                })
+            logging.info(f"Traduziu {len(news_list)} notícias para {target_lang}")
+            return translated_news
+        except Exception as e:
+            logging.error(f"Erro ao traduzir notícias para {target_lang}: {e}")
+            return news_list  # Retorna notícias originais em caso de erro
+
     def save_news(self, news_list: list) -> list:
         """Salva notícias no banco de dados e retorna os news_id."""
         news_ids = []
@@ -102,7 +122,7 @@ class NewsService:
                         """,
                         (news["title"], news["url"], news["topic"], news["published_at"])
                     )
-                    if cursor.rowcount > 0:  # Nova notícia inserida
+                    if cursor.rowcount > 0:
                         cursor.execute(
                             "SELECT news_id FROM news WHERE url = ?",
                             (news["url"],)
