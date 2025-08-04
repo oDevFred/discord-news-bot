@@ -1,7 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from discord.ui import Button, Select, View
+from discord.ui import Button, Select
 from database import Database
 from news import NewsService
 import logging
