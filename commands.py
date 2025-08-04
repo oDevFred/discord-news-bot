@@ -22,10 +22,8 @@ class NewsCog(commands.Cog):
 
     @app_commands.command(name="news", description="Acessa o menu de notícias")
     async def news(self, interaction: discord.Interaction):
-        # Adicionar usuário ao banco
         self.db.add_user(interaction.user.id, interaction.user.name)
-        # Criar interface gráfica
-        view = NewsView(self.db, self.news_service, self.topics)
+        view = NewsView(self.db, self.news_service, self.topics, interaction.guild)
         await interaction.response.send_message(
             "Bem-vindo ao News Bot! Escolha uma ação:",
             view=view,
@@ -34,32 +32,29 @@ class NewsCog(commands.Cog):
         logging.info(f"Comando /news executado por {interaction.user}")
 
 class NewsView(discord.ui.View):
-    def __init__(self, db: Database, news_service: NewsService, topics: list):
-        super().__init__(timeout=None)  # Persistente
+    def __init__(self, db: Database, news_service: NewsService, topics: list, guild: discord.Guild):
+        super().__init__(timeout=None)
         self.db = db
         self.news_service = news_service
         self.topics = topics
+        self.guild = guild
 
-        # Botão: Assinar Tópicos
         button_subscribe = Button(label="Assinar Tópicos", style=discord.ButtonStyle.primary)
         button_subscribe.callback = self.subscribe_button_callback
         self.add_item(button_subscribe)
 
-        # Botão: Ver Notícias
         button_view = Button(label="Ver Notícias", style=discord.ButtonStyle.secondary)
         button_view.callback = self.view_news_button_callback
         self.add_item(button_view)
 
-        # Botão: Resumo Diário (placeholder)
         button_summary = Button(label="Resumo Diário", style=discord.ButtonStyle.secondary)
         button_summary.callback = self.summary_button_callback
         self.add_item(button_summary)
 
     async def subscribe_button_callback(self, interaction: discord.Interaction):
-        # Exibir dropdown de tópicos
         view = SubscribeView(self.db, self.topics, interaction.user.id)
         await interaction.response.send_message(
-            "Selecione um tópico para assinar/desassinar:",
+            "Selecione um ou mais tópicos para assinar/desassinar:",
             view=view,
             ephemeral=True
         )
@@ -71,16 +66,13 @@ class NewsView(discord.ui.View):
         if not subscriptions:
             await interaction.followup.send("Você não assinou nenhum tópico!", ephemeral=True)
             return
-        news_list = []
-        for topic in subscriptions:
-            news_list.extend(self.news_service.fetch_news(topic, limit=2))
-        if not news_list:
-            await interaction.followup.send("Nenhuma notícia encontrada para seus tópicos.", ephemeral=True)
-            return
-        response = "\n".join([f"- {news['title']} ({news['url']})" for news in news_list])
-        await interaction.followup.send(f"Notícias para seus tópicos:\n{response}", ephemeral=True)
-        self.news_service.save_news(news_list)
-        logging.info(f"Botão 'Ver Notícias' clicado por {interaction.user}, exibidas {len(news_list)} notícias")
+        view = DeliveryView(self.db, self.news_service, subscriptions, self.guild, interaction.user)
+        await interaction.followup.send(
+            "Escolha onde receber as notícias:",
+            view=view,
+            ephemeral=True
+        )
+        logging.info(f"Botão 'Ver Notícias' clicado por {interaction.user}")
 
     async def summary_button_callback(self, interaction: discord.Interaction):
         await interaction.response.send_message(
@@ -91,34 +83,108 @@ class NewsView(discord.ui.View):
 
 class SubscribeView(discord.ui.View):
     def __init__(self, db: Database, topics: list, user_id: int):
-        super().__init__(timeout=60.0)  # Expira após 60 segundos
+        super().__init__(timeout=60.0)
         self.db = db
         self.user_id = user_id
         select = Select(
-            placeholder="Escolha um tópico",
+            placeholder="Escolha um ou mais tópicos",
             options=[
                 discord.SelectOption(label=topic.capitalize(), value=topic)
                 for topic in topics
+            ],
+            min_values=1,
+            max_values=len(topics)
+        )
+        select.callback = self.select_callback
+        self.add_item(select)
+
+    async def select_callback(self, interaction: discord.Interaction):
+        selected_topics = interaction.data["values"]
+        current_subscriptions = set(self.db.get_subscriptions(self.user_id))
+        added = []
+        removed = []
+
+        for topic in selected_topics:
+            if topic in current_subscriptions:
+                self.db.remove_subscription(self.user_id, topic)
+                removed.append(topic)
+            else:
+                self.db.add_subscription(self.user_id, topic)
+                added.append(topic)
+
+        message = []
+        if added:
+            message.append(f"Assinados: {', '.join(added)}")
+        if removed:
+            message.append(f"Desassinados: {', '.join(removed)}")
+        updated_subscriptions = self.db.get_subscriptions(self.user_id)
+        if updated_subscriptions:
+            message.append(f"Tópicos atuais: {', '.join(updated_subscriptions)}")
+        else:
+            message.append("Você não tem tópicos assinados.")
+
+        await interaction.response.send_message(
+            "\n".join(message),
+            ephemeral=True
+        )
+        logging.info(
+            f"Usuário {interaction.user} atualizou assinaturas: "
+            f"Adicionados={added}, Removidos={removed}"
+        )
+
+class DeliveryView(discord.ui.View):
+    def __init__(self, db: Database, news_service: NewsService, subscriptions: list, guild: discord.Guild, user: discord.User):
+        super().__init__(timeout=60.0)
+        self.db = db
+        self.news_service = news_service
+        self.subscriptions = subscriptions
+        self.guild = guild
+        self.user = user
+        select = Select(
+            placeholder="Escolha o destino das notícias",
+            options=[
+                discord.SelectOption(label="Mensagem Privada", value="dm"),
+                discord.SelectOption(label="Canal Atual", value="channel")
             ]
         )
         select.callback = self.select_callback
         self.add_item(select)
 
     async def select_callback(self, interaction: discord.Interaction):
-        topic = interaction.data["values"][0]
-        subscriptions = self.db.get_subscriptions(self.user_id)
-        if topic in subscriptions:
-            self.db.remove_subscription(self.user_id, topic)
-            await interaction.response.send_message(
-                f"Você desassinou o tópico '{topic}'!", ephemeral=True
+        await interaction.response.defer(ephemeral=True)
+        destination = interaction.data["values"][0]
+        news_list = []
+        for topic in self.subscriptions:
+            news_list.extend(self.news_service.fetch_news(topic, limit=2))
+        if not news_list:
+            await interaction.followup.send("Nenhuma notícia encontrada para seus tópicos.", ephemeral=True)
+            return
+
+        # Salvar notícias e obter news_id
+        news_ids = self.news_service.save_news(news_list)
+        response = "\n".join([f"- {news['title']} ({news['url']})" for news in news_list])
+
+        try:
+            if destination == "dm":
+                message = await self.user.send(f"Notícias para seus tópicos:\n{response}")
+            else:
+                message = await interaction.channel.send(f"Notícias para {self.user.mention}:\n{response}")
+
+            # Atualizar message_id no banco
+            for news_id in news_ids:
+                self.db.update_news_message_id(news_id, message.id)
+
+            await interaction.followup.send("Notícias enviadas com sucesso!", ephemeral=True)
+            logging.info(
+                f"Notícias enviadas para {destination} por {self.user}, "
+                f"{len(news_list)} notícias, message_id={message.id}"
             )
-            logging.info(f"Usuário {interaction.user} desassinou o tópico {topic}")
-        else:
-            self.db.add_subscription(self.user_id, topic)
-            await interaction.response.send_message(
-                f"Você assinou o tópico '{topic}'!", ephemeral=True
+        except discord.errors.Forbidden as e:
+            await interaction.followup.send(
+                "Erro: Não tenho permissão para enviar mensagens no destino escolhido.",
+                ephemeral=True
             )
-            logging.info(f"Usuário {interaction.user} assinou o tópico {topic}")
+            logging.error(f"Erro ao enviar notícias para {destination}: {e}")
 
 async def setup(bot):
     db = Database()

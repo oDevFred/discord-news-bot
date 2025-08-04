@@ -133,3 +133,18 @@ class Database:
         except sqlite3.Error as e:
             logging.error(f"Erro ao remover assinatura para usuário {user_id}: {e}")
             raise
+
+    def update_news_message_id(self, news_id: int, message_id: int):
+        """Atualiza o message_id de uma notícia no banco."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE news SET message_id = ? WHERE news_id = ?",
+                    (message_id, news_id)
+                )
+                conn.commit()
+                logging.info(f"Message ID {message_id} atualizado para notícia {news_id}.")
+        except sqlite3.Error as e:
+            logging.error(f"Erro ao atualizar message_id para notícia {news_id}: {e}")
+            raise

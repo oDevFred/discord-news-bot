@@ -77,13 +77,10 @@ class NewsService:
     def fetch_news(self, topic: str, limit: int = 5) -> list:
         """Busca notícias combinando News API e RSS, removendo duplicatas."""
         news_list = []
-        # Priorizar News API
         if self.news_api_key:
             news_list.extend(self.fetch_news_api(topic, limit))
-        # Fallback para RSS
         if len(news_list) < limit:
             news_list.extend(self.fetch_rss_feed(topic, limit - len(news_list)))
-        # Remover duplicatas por URL
         seen_urls = set()
         unique_news = [
             news for news in news_list
@@ -91,8 +88,9 @@ class NewsService:
         ]
         return unique_news[:limit]
 
-    def save_news(self, news_list: list):
-        """Salva notícias no banco de dados."""
+    def save_news(self, news_list: list) -> list:
+        """Salva notícias no banco de dados e retorna os news_id."""
+        news_ids = []
         try:
             with self.db.get_connection() as conn:
                 cursor = conn.cursor()
@@ -104,8 +102,16 @@ class NewsService:
                         """,
                         (news["title"], news["url"], news["topic"], news["published_at"])
                     )
+                    if cursor.rowcount > 0:  # Nova notícia inserida
+                        cursor.execute(
+                            "SELECT news_id FROM news WHERE url = ?",
+                            (news["url"],)
+                        )
+                        news_id = cursor.fetchone()["news_id"]
+                        news_ids.append(news_id)
                 conn.commit()
-                logging.info(f"Salvas {len(news_list)} notícias no banco.")
+                logging.info(f"Salvas {len(news_list)} notícias no banco, IDs: {news_ids}")
+                return news_ids
         except sqlite3.Error as e:
             logging.error(f"Erro ao salvar notícias: {e}")
             raise
