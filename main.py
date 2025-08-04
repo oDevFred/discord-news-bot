@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import config
 import logging
+from commands import setup
 
 # Configurar logging
 logging.basicConfig(
@@ -18,7 +19,15 @@ intents.reactions = True
 intents.guilds = True
 
 # Inicializar o bot
-bot = commands.Bot(command_prefix="!", intents=intents)
+class NewsBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=intents)
+        self.config = config
+
+    async def setup_hook(self):
+        await setup(self)
+
+bot = NewsBot()
 
 # Evento: Bot pronto
 @bot.event

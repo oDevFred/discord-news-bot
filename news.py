@@ -29,7 +29,7 @@ class NewsService:
             params = {
                 "q": topic,
                 "apiKey": self.news_api_key,
-                "language": "eng",
+                "language": "en",
                 "sortBy": "publishedAt",
                 "pageSize": limit
             }
