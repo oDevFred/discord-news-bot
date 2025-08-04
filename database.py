@@ -175,3 +175,36 @@ class Database:
         except sqlite3.Error as e:
             logging.error(f"Erro ao recuperar votos para notícia {news_id}: {e}")
             raise
+
+    def get_top_voted_news(self, topics: list, limit: int = 5) -> list:
+        """Retorna as notícias mais votadas para os tópicos especificados."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                query = """
+                    SELECT n.news_id, n.title, n.url, n.topic, n.published_at, 
+                           COUNT(v.vote_type) as vote_count
+                    FROM news n
+                    LEFT JOIN votes v ON n.news_id = v.news_id
+                    WHERE n.topic IN ({})
+                    GROUP BY n.news_id
+                    ORDER BY vote_count DESC, n.published_at DESC
+                    LIMIT ?
+                """
+                placeholders = ",".join("?" for _ in topics)
+                cursor.execute(query.format(placeholders), topics + [limit])
+                news = [
+                    {
+                        "news_id": row["news_id"],
+                        "title": row["title"],
+                        "url": row["url"],
+                        "topic": row["topic"],
+                        "vote_count": row["vote_count"]
+                    }
+                    for row in cursor.fetchall()
+                ]
+                logging.info(f"Notícias mais votadas recuperadas: {len(news)} para tópicos {topics}")
+                return news
+        except sqlite3.Error as e:
+            logging.error(f"Erro ao recuperar notícias mais votadas: {e}")
+            raise

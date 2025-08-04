@@ -104,11 +104,18 @@ class NewsView(discord.ui.View):
         logging.info(f"Botão 'Ver Notícias' clicado por {interaction.user}")
 
     async def summary_button_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message(
-            "Resumo diário será implementado no futuro!",
-            ephemeral=True
-        )
-        logging.info(f"Botão 'Resumo Diário' clicado por {interaction.user}")
+        await interaction.response.defer(ephemeral=True)
+        subscriptions = self.db.get_subscriptions(interaction.user.id)
+        if not subscriptions:
+            await interaction.followup.send("Você não assinou nenhum tópico!", ephemeral=True)
+            return
+        top_news = self.db.get_top_voted_news(subscriptions, limit=3)
+        if not top_news:
+            await interaction.followup.send("Nenhuma notícia votada encontrada para seus tópicos.", ephemeral=True)
+            return
+        response = "\n".join([f"- {news['title']} ({news['url']}) [{news['vote_count']} votos]" for news in top_news])
+        await interaction.followup.send(f"Resumo diário:\n{response}", ephemeral=True)
+        logging.info(f"Resumo diário exibido para {interaction.user}, {len(top_news)} notícias")
 
 class SubscribeView(discord.ui.View):
     def __init__(self, db: Database, topics: list, user_id: int):
@@ -199,11 +206,9 @@ class DeliveryView(discord.ui.View):
             else:
                 message = await interaction.channel.send(f"Notícias para {self.user.mention}:\n{response}", view=view)
 
-            # Adicionar reações
             await message.add_reaction("👍")
             await message.add_reaction("⭐")
 
-            # Atualizar message_id no banco
             for news_id in news_ids:
                 self.db.update_news_message_id(news_id, message.id)
 
