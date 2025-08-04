@@ -29,14 +29,12 @@ class Database:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                # Tabela de usuários
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS users (
                         user_id INTEGER PRIMARY KEY,
                         username TEXT NOT NULL
                     )
                 """)
-                # Tabela de assinaturas
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS subscriptions (
                         user_id INTEGER,
@@ -45,7 +43,6 @@ class Database:
                         FOREIGN KEY (user_id) REFERENCES users(user_id)
                     )
                 """)
-                # Tabela de notícias
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS news (
                         news_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,7 +53,6 @@ class Database:
                         message_id INTEGER
                     )
                 """)
-                # Tabela de votos
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS votes (
                         news_id INTEGER,
@@ -147,4 +143,35 @@ class Database:
                 logging.info(f"Message ID {message_id} atualizado para notícia {news_id}.")
         except sqlite3.Error as e:
             logging.error(f"Erro ao atualizar message_id para notícia {news_id}: {e}")
+            raise
+
+    def add_vote(self, news_id: int, user_id: int, vote_type: str):
+        """Adiciona ou atualiza um voto para uma notícia."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT OR REPLACE INTO votes (news_id, user_id, vote_type) VALUES (?, ?, ?)",
+                    (news_id, user_id, vote_type)
+                )
+                conn.commit()
+                logging.info(f"Voto {vote_type} adicionado para notícia {news_id} por usuário {user_id}.")
+        except sqlite3.Error as e:
+            logging.error(f"Erro ao adicionar voto para notícia {news_id} por usuário {user_id}: {e}")
+            raise
+
+    def get_votes(self, news_id: int) -> list:
+        """Retorna a lista de votos para uma notícia."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT user_id, vote_type FROM votes WHERE news_id = ?",
+                    (news_id,)
+                )
+                votes = [{"user_id": row["user_id"], "vote_type": row["vote_type"]} for row in cursor.fetchall()]
+                logging.info(f"Votos recuperados para notícia {news_id}: {votes}")
+                return votes
+        except sqlite3.Error as e:
+            logging.error(f"Erro ao recuperar votos para notícia {news_id}: {e}")
             raise

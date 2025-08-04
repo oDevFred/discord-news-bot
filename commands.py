@@ -1,4 +1,5 @@
 import discord
+import sqlite3
 from discord import app_commands
 from discord.ext import commands
 from discord.ui import Button, Select, View
@@ -30,6 +31,34 @@ class NewsCog(commands.Cog):
             ephemeral=True
         )
         logging.info(f"Comando /news executado por {interaction.user}")
+
+    @commands.Cog.listener()
+    async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
+        if user.bot:
+            return
+        message_id = reaction.message.id
+        try:
+            with self.db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT news_id FROM news WHERE message_id = ?",
+                    (message_id,)
+                )
+                result = cursor.fetchone()
+                if not result:
+                    return
+                news_id = result["news_id"]
+                vote_type = None
+                if str(reaction.emoji) == "👍":
+                    vote_type = "upvote"
+                elif str(reaction.emoji) == "⭐":
+                    vote_type = "star"
+                if vote_type:
+                    self.db.add_user(user.id, user.name)
+                    self.db.add_vote(news_id, user.id, vote_type)
+                    logging.info(f"Reação {vote_type} adicionada por {user} na notícia {news_id}")
+        except sqlite3.Error as e:
+            logging.error(f"Erro ao processar reação para mensagem {message_id}: {e}")
 
 class NewsView(discord.ui.View):
     def __init__(self, db: Database, news_service: NewsService, topics: list, guild: discord.Guild):
@@ -160,15 +189,19 @@ class DeliveryView(discord.ui.View):
             await interaction.followup.send("Nenhuma notícia encontrada para seus tópicos.", ephemeral=True)
             return
 
-        # Salvar notícias e obter news_id
         news_ids = self.news_service.save_news(news_list)
         response = "\n".join([f"- {news['title']} ({news['url']})" for news in news_list])
 
         try:
+            view = VoteView(self.db, news_ids)
             if destination == "dm":
-                message = await self.user.send(f"Notícias para seus tópicos:\n{response}")
+                message = await self.user.send(f"Notícias para seus tópicos:\n{response}", view=view)
             else:
-                message = await interaction.channel.send(f"Notícias para {self.user.mention}:\n{response}")
+                message = await interaction.channel.send(f"Notícias para {self.user.mention}:\n{response}", view=view)
+
+            # Adicionar reações
+            await message.add_reaction("👍")
+            await message.add_reaction("⭐")
 
             # Atualizar message_id no banco
             for news_id in news_ids:
@@ -185,6 +218,51 @@ class DeliveryView(discord.ui.View):
                 ephemeral=True
             )
             logging.error(f"Erro ao enviar notícias para {destination}: {e}")
+
+class VoteView(discord.ui.View):
+    def __init__(self, db: Database, news_ids: list):
+        super().__init__(timeout=None)
+        self.db = db
+        self.news_ids = news_ids
+        button = Button(label="Votar", style=discord.ButtonStyle.primary)
+        button.callback = self.vote_button_callback
+        self.add_item(button)
+
+    async def vote_button_callback(self, interaction: discord.Interaction):
+        view = VoteSelectView(self.db, self.news_ids, interaction.user.id)
+        await interaction.response.send_message(
+            "Escolha o tipo de voto para as notícias:",
+            view=view,
+            ephemeral=True
+        )
+        logging.info(f"Botão 'Votar' clicado por {interaction.user}")
+
+class VoteSelectView(discord.ui.View):
+    def __init__(self, db: Database, news_ids: list, user_id: int):
+        super().__init__(timeout=60.0)
+        self.db = db
+        self.news_ids = news_ids
+        self.user_id = user_id
+        select = Select(
+            placeholder="Escolha o tipo de voto",
+            options=[
+                discord.SelectOption(label="Upvote (👍)", value="upvote"),
+                discord.SelectOption(label="Star (⭐)", value="star")
+            ]
+        )
+        select.callback = self.select_callback
+        self.add_item(select)
+
+    async def select_callback(self, interaction: discord.Interaction):
+        vote_type = interaction.data["values"][0]
+        self.db.add_user(self.user_id, interaction.user.name)
+        for news_id in self.news_ids:
+            self.db.add_vote(news_id, self.user_id, vote_type)
+        await interaction.response.send_message(
+            f"Voto '{vote_type}' registrado para {len(self.news_ids)} notícias!",
+            ephemeral=True
+        )
+        logging.info(f"Usuário {interaction.user} votou '{vote_type}' em {len(self.news_ids)} notícias")
 
 async def setup(bot):
     db = Database()
